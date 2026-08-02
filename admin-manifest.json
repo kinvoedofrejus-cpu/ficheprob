@@ -1,0 +1,25 @@
+{
+  "name": "FicheProBot Admin",
+  "short_name": "FPB Admin",
+  "description": "Espace d'administration FicheProBot — gestion des utilisateurs, paiements et promotions",
+  "start_url": "/admin-dashboard.html",
+  "scope": "/admin-dashboard.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F4F7FC",
+  "theme_color": "#1B3E93",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

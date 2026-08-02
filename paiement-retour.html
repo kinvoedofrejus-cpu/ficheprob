@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FicheProBot — Paiement</title>
+<style>
+  body{
+    margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+    background:#F4F7FC; font-family:'Segoe UI',Arial,sans-serif; color:#1B2740; padding:20px;
+  }
+  .card{ background:#fff; border-radius:14px; padding:30px 26px; max-width:420px; width:100%; text-align:center; box-shadow:0 4px 18px rgba(27,39,64,.1); }
+  h1{ font-size:20px; margin:0 0 14px; }
+  .spinner{ width:34px; height:34px; border:4px solid #DCE3F0; border-top-color:#2557C7; border-radius:50%; margin:10px auto 18px; animation:spin 1s linear infinite; }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  .code{ font-family:monospace; font-size:20px; font-weight:bold; background:#F4F7FC; border:1.5px dashed #DCE3F0; border-radius:8px; padding:14px; margin:16px 0; word-break:break-all; }
+  .err{ color:#D14343; font-size:14px; }
+  button{ background:#2557C7; color:#fff; border:none; padding:11px 20px; border-radius:8px; font-weight:600; cursor:pointer; font-size:14px; }
+</style>
+</head>
+<body>
+<div class="card" id="card">
+  <div class="spinner"></div>
+  <h1>Vérification du paiement…</h1>
+  <p style="font-size:13.5px; color:#5B6B85;">Merci de patienter quelques secondes.</p>
+</div>
+
+<script>
+const params = new URLSearchParams(window.location.search);
+const txId = params.get('id') || params.get('transaction_id') || params.get('reference') || params.get('transactionId');
+const card = document.getElementById('card');
+
+async function checkStatus(attempt){
+  if(!txId){
+    card.innerHTML = `<h1>Lien invalide</h1><p class="err">Aucune transaction trouvée dans le lien. Si tu viens de payer, retourne sur le site et utilise "Me connecter" avec ton numéro et le code reçu (regarde aussi tes SMS/emails FedaPay).</p>`;
+    return;
+  }
+  try{
+    const res = await fetch(`/api/payment-status?id=${encodeURIComponent(txId)}`);
+    const data = await res.json();
+
+    if(data.status === 'paid' && data.code){
+      card.innerHTML = `
+        <h1>✅ Paiement confirmé</h1>
+        <p style="font-size:13.5px; color:#5B6B85;">Ce code est ta clé de connexion à la plateforme. Retourne sur le site, clique sur "Me connecter", et saisis ton numéro de téléphone avec ce code.</p>
+        <div class="code" id="codeBox">${data.code}</div>
+        <button onclick="navigator.clipboard.writeText('${data.code}')">Copier le code</button>
+      `;
+      return;
+    }
+    if(data.status === 'failed'){
+      card.innerHTML = `<h1>❌ Paiement échoué</h1><p class="err">Le paiement n'a pas abouti. Réessaie depuis la plateforme.</p>`;
+      return;
+    }
+    // encore en attente : réessayer un peu (le webhook peut arriver après la redirection)
+    if(attempt < 15){
+      setTimeout(()=>checkStatus(attempt+1), 2000);
+    } else {
+      card.innerHTML = `
+        <h1>Paiement en cours de confirmation</h1>
+        <p style="font-size:13.5px; color:#5B6B85;">Ça prend plus de temps que prévu. Reviens dans quelques minutes, ou contacte-nous sur WhatsApp si le problème persiste.</p>
+      `;
+    }
+  } catch(e){
+    card.innerHTML = `<h1>Erreur</h1><p class="err">Impossible de vérifier le paiement pour le moment.</p>`;
+  }
+}
+checkStatus(0);
+</script>
+</body>
+</html>

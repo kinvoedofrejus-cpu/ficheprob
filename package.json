@@ -1,0 +1,9 @@
+{
+  "name": "ficheprobot-payment-functions",
+  "version": "1.0.0",
+  "description": "Fonctions Netlify pour le paiement automatique FedaPay de FicheProBot",
+  "dependencies": {
+    "@netlify/blobs": "^8.1.0",
+    "fedapay": "^1.1.7"
+  }
+}
