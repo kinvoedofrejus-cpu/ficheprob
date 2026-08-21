@@ -9,7 +9,7 @@ binding = "ASSETS"
 [[d1_databases]]
 binding = "FPB_DB"
 database_name = "ficheprobot-db"
-database_id = "REMPLACE_PAR_L_ID_RETOURNE_PAR_WRANGLER_D1_CREATE"
+database_id = "bf38db8a-a6e9-4f5b-9f34-cc996c123551"
 
 [[r2_buckets]]
 binding = "FPB_IMAGES"
