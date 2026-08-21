@@ -1,0 +1,19 @@
+name = "ficheprobot-site"
+main = "worker.js"
+compatibility_date = "2026-07-21"
+
+[assets]
+directory = "./"
+binding = "ASSETS"
+
+[[d1_databases]]
+binding = "FPB_DB"
+database_name = "ficheprobot-db"
+database_id = "REMPLACE_PAR_L_ID_RETOURNE_PAR_WRANGLER_D1_CREATE"
+
+[[r2_buckets]]
+binding = "FPB_IMAGES"
+bucket_name = "ficheprobot-images"
+
+[ai]
+binding = "AI"
