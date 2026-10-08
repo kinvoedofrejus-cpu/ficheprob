@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dépôt des PDF Fiche Prête (admin)</title>
+<style>
+  body{ font-family: 'Poppins', Arial, sans-serif; max-width:640px; margin:0 auto; padding:16px; background:#f5f6fa; color:#1B2740; }
+  h1{ font-size:18px; } p{ font-size:13px; color:#555; line-height:1.5; }
+  .card{ background:#fff; border-radius:10px; padding:14px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
+  input, button{ width:100%; padding:12px; border-radius:7px; box-sizing:border-box; margin-bottom:8px; font-size:14px; }
+  input{ border:1px solid #ccc; }
+  button{ border:none; background:#2557C7; color:#fff; font-weight:600; cursor:pointer; }
+  button:disabled{ opacity:.5; }
+  .row{ display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid #eee; font-size:13px; gap:8px; }
+  .row:last-child{ border-bottom:none; }
+  .status{ font-weight:600; white-space:nowrap; }
+  .status.ok{ color:#1a9d4b; } .status.err{ color:#c0392b; } .status.pending{ color:#999; } .status.run{ color:#2557C7; }
+  #log{ font-size:12px; color:#555; white-space:pre-wrap; max-height:160px; overflow:auto; background:#fafafa; padding:8px; border-radius:6px; }
+</style>
+</head>
+<body>
+<h1>Dépôt des PDF Fiche Prête — gratuit</h1>
+<p>
+  Sélectionne le <b>dossier complet</b> que Claude t'a fourni (celui qui contient
+  des sous-dossiers <code>CM1/</code>, <code>CM2/</code>… avec des fichiers
+  <code>.pdf</code> et <code>.meta.json</code> dedans). Chaque fichier est
+  déposé automatiquement à la bonne place dans ton espace de stockage R2 —
+  rien à taper, rien ne coûte quoi que ce soit (c'est juste du dépôt de
+  fichiers déjà prêts).
+</p>
+
+<div class="card" id="loginStatusCard">
+  <div id="loginMsg" style="font-size:13px;">Connexion en cours…</div>
+</div>
+
+<div class="card" id="pickCard" style="display:none;">
+  <input type="file" id="folderInput" webkitdirectory multiple>
+  <button onclick="startUpload()" id="uploadBtn">Déposer les fichiers sélectionnés</button>
+  <div id="progress" style="font-size:13px; margin-top:6px;"></div>
+</div>
+
+<div class="card" id="listCard" style="display:none;">
+  <div id="list"></div>
+</div>
+
+<div class="card">
+  <div id="log"></div>
+</div>
+
+<script>
+let token = null;
+
+function log(msg){
+  const el = document.getElementById('log');
+  el.textContent = (new Date().toLocaleTimeString() + '  ' + msg + '\n') + el.textContent;
+}
+
+// Connexion automatique avec les identifiants admin en dur dans le code
+// (functions/api/_shared.js : ADMIN_EMAIL_HARDCODED / ADMIN_PASSWORD_HARDCODED).
+// Pas de formulaire : si ça échoue, le message d'erreur exact du serveur
+// s'affiche ici, ce qui dit précisément ce qui ne va pas (identifiants
+// différents de ceux du code, session expirée, etc.).
+async function autoLogin(){
+  const email = 'kinvoedofrejus@gmail.com';
+  const password = '1996';
+  try{
+    const res = await fetch('/api/admin-login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email,password}) });
+    const data = await res.json();
+    if(data.ok && data.token){
+      token = data.token;
+      document.getElementById('loginStatusCard').style.display = 'none';
+      document.getElementById('pickCard').style.display = 'block';
+      log('Connecté automatiquement.');
+    } else {
+      document.getElementById('loginMsg').textContent = 'Échec de connexion : ' + (data.error || data.reason || 'identifiants refusés par le serveur.');
+    }
+  }catch(e){
+    document.getElementById('loginMsg').textContent = 'Erreur réseau lors de la connexion : ' + e.message;
+  }
+}
+autoLogin();
+
+// Déduit {classe, matiere, kind} depuis le chemin relatif du fichier dans le
+// dossier choisi, par ex: "readyfiche-pdfs-out/CM1/francais.pdf"
+// -> {classe:'CM1', matiere:'francais', kind:'pdf'}. Les fichiers qui ne
+// correspondent pas à ce schéma (2 niveaux, .pdf ou .meta.json) sont ignorés.
+function parseFile(file){
+  const parts = (file.webkitRelativePath || file.name).split('/');
+  if(parts.length < 2) return null;
+  const name = parts[parts.length - 1];
+  const classe = parts[parts.length - 2];
+  let matiere, kind;
+  if(name.endsWith('.meta.json')){ matiere = name.slice(0, -'.meta.json'.length); kind = 'meta'; }
+  else if(name.endsWith('.pdf')){ matiere = name.slice(0, -'.pdf'.length); kind = 'pdf'; }
+  else return null;
+  if(!classe || !matiere) return null;
+  return { classe, matiere, kind };
+}
+
+function renderList(items){
+  document.getElementById('listCard').style.display = 'block';
+  const el = document.getElementById('list');
+  el.innerHTML = items.map((it, i) => {
+    const st = it.status || 'pending';
+    const label = st==='ok' ? 'OK' : st==='err' ? 'Erreur' : st==='run' ? 'Envoi…' : 'En attente';
+    return '<div class="row" id="row-'+i+'"><span>'+it.classe+' / '+it.matiere+' ('+it.kind+')</span><span class="status '+st+'">'+label+'</span></div>';
+  }).join('');
+}
+
+function setStatus(items, i, st){
+  items[i].status = st;
+  const row = document.getElementById('row-'+i);
+  if(!row) return;
+  const span = row.querySelector('.status');
+  span.className = 'status ' + st;
+  span.textContent = st==='ok' ? 'OK' : st==='err' ? 'Erreur' : st==='run' ? 'Envoi…' : 'En attente';
+}
+
+async function startUpload(){
+  if(!token){ alert("Connecte-toi d'abord."); return; }
+  const input = document.getElementById('folderInput');
+  const files = Array.from(input.files || []);
+  if(!files.length){ alert('Choisis un dossier contenant les fichiers générés.'); return; }
+
+  const items = [];
+  for(const file of files){
+    const parsed = parseFile(file);
+    if(!parsed) continue;
+    items.push({ ...parsed, file, status: 'pending' });
+  }
+  if(!items.length){
+    alert("Aucun fichier .pdf ou .meta.json reconnu dans ce dossier (attendu : <classe>/<matiere>.pdf et .meta.json).");
+    return;
+  }
+
+  renderList(items);
+  document.getElementById('uploadBtn').disabled = true;
+  let ok = 0, errors = 0;
+  for(let i = 0; i < items.length; i++){
+    const it = items[i];
+    setStatus(items, i, 'run');
+    document.getElementById('progress').textContent = 'Fichier ' + (i+1) + '/' + items.length;
+    try{
+      const fd = new FormData();
+      fd.append('token', token);
+      fd.append('classe', it.classe);
+      fd.append('matiere', it.matiere);
+      fd.append('kind', it.kind);
+      fd.append('file', it.file);
+      const res = await fetch('/api/admin-upload-readyfiche-pdf', { method:'POST', body: fd });
+      const data = await res.json();
+      if(data.ok){
+        setStatus(items, i, 'ok'); ok++;
+        log(it.classe+'/'+it.matiere+'.'+(it.kind==='pdf'?'pdf':'meta.json')+' déposé.');
+      } else {
+        setStatus(items, i, 'err'); errors++;
+        log(it.classe+'/'+it.matiere+' ERREUR: '+(data.error||data.reason||'inconnue'));
+      }
+    }catch(e){
+      setStatus(items, i, 'err'); errors++;
+      log(it.classe+'/'+it.matiere+' ERREUR réseau: '+e.message);
+    }
+  }
+  document.getElementById('progress').textContent = 'Terminé : '+ok+'/'+items.length+' déposés, '+errors+' erreur(s).';
+  document.getElementById('uploadBtn').disabled = false;
+}
+</script>
+</body>
+</html>
