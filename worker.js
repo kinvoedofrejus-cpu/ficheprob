@@ -40,7 +40,6 @@ import * as getReadyFicheStatus from './functions/api/get-readyfiche-status.js';
 import * as recordReadyFicheDownload from './functions/api/record-readyfiche-download.js';
 import * as getReadyFichePdf from './functions/api/get-readyfiche-pdf.js';
 import * as getReadyFicheMeta from './functions/api/get-readyfiche-meta.js';
-import * as adminPregenerateReadyFiches from './functions/api/admin-pregenerate-readyfiches.js';
 import * as adminUploadReadyFichePdf from './functions/api/admin-upload-readyfiche-pdf.js';
 
 const routes = {
@@ -86,7 +85,6 @@ const routes = {
   '/api/record-readyfiche-download': recordReadyFicheDownload,
   '/api/get-readyfiche-pdf': getReadyFichePdf,
   '/api/get-readyfiche-meta': getReadyFicheMeta,
-  '/api/admin-pregenerate-readyfiches': adminPregenerateReadyFiches,
   '/api/admin-upload-readyfiche-pdf': adminUploadReadyFichePdf,
 };
 
@@ -96,15 +94,30 @@ export default {
     const mod = routes[url.pathname];
 
     if (mod) {
-      const handlerName = 'onRequest' + request.method.charAt(0) + request.method.slice(1).toLowerCase();
+      const handlerName =
+        'onRequest' +
+        request.method.charAt(0) +
+        request.method.slice(1).toLowerCase();
+
       const handler = mod[handlerName] || mod.onRequest;
+
       if (handler) {
-        return handler({ request, env, waitUntil: ctx.waitUntil.bind(ctx), params: {} });
+        return handler({
+          request,
+          env,
+          waitUntil: ctx.waitUntil.bind(ctx),
+          params: {},
+        });
       }
+
       return new Response('Method not allowed', { status: 405 });
     }
 
     // Sinon, sert les fichiers statiques (HTML, JS, images, etc.)
     return env.ASSETS.fetch(request);
-  }
+  },
 };
+
+Tu peux remplacer entièrement le contenu actuel de "worker.js" par celui-ci.
+
+Ensuite, envoie la modification sur GitHub et relance le déploiement Cloudflare.
