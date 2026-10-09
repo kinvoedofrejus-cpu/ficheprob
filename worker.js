@@ -41,6 +41,12 @@ import * as recordReadyFicheDownload from './functions/api/record-readyfiche-dow
 import * as getReadyFichePdf from './functions/api/get-readyfiche-pdf.js';
 import * as getReadyFicheMeta from './functions/api/get-readyfiche-meta.js';
 import * as adminUploadReadyFichePdf from './functions/api/admin-upload-readyfiche-pdf.js';
+import * as generateAssiste from './functions/api/generate-assiste.js';
+import * as getResourcePdf from './functions/api/get-resource-pdf.js';
+import * as getResourceMeta from './functions/api/get-resource-meta.js';
+import * as adminUploadResourcePdf from './functions/api/admin-upload-resource-pdf.js';
+import * as claimFirstDownload from './functions/api/claim-first-download.js';
+import * as createResourcePayment from './functions/api/create-resource-payment.js';
 
 const routes = {
   '/api/admin-login': adminLogin,
@@ -86,6 +92,12 @@ const routes = {
   '/api/get-readyfiche-pdf': getReadyFichePdf,
   '/api/get-readyfiche-meta': getReadyFicheMeta,
   '/api/admin-upload-readyfiche-pdf': adminUploadReadyFichePdf,
+  '/api/generate-assiste': generateAssiste,
+  '/api/get-resource-pdf': getResourcePdf,
+  '/api/get-resource-meta': getResourceMeta,
+  '/api/admin-upload-resource-pdf': adminUploadResourcePdf,
+  '/api/claim-first-download': claimFirstDownload,
+  '/api/create-resource-payment': createResourcePayment,
 };
 
 export default {
