@@ -1,0 +1,24 @@
+MISE A JOUR FICHEPROBOT (13/10/2026)
+
+FICHIERS MODIFIES (remplacer ceux du depot) :
+  index.html
+  service-worker.js
+  render-readyfiche.html
+  functions/api/get-readyfiche-pdf.js
+  functions/api/get-readyfiche-meta.js
+  functions/api/get-readyfiche-status.js
+  functions/api/record-readyfiche-download.js
+
+NOUVEAUX DOSSIERS (a creer puis y envoyer les fichiers) :
+  ready-data/   -> catalogue.js, CI.js, CP.js, CM1.js, CM2.js
+  apercus/      -> 19 PDF d'apercu gratuit (CI-..., CM1-..., CM2-...)
+
+A SUPPRIMER APRES LE DEPLOIEMENT :
+  ready-fiches-data.js   (remplace par ready-data/, 9 Mo en moins)
+
+A DEPOSER A PART (stockage R2, via admin-upload-readyfiche-pdfs.html) :
+  les PDF + .meta.json de CI (zip readyfiche-pdfs-CI-remplis)
+
+Creer un dossier sur GitHub : Add file > Create new file, taper
+  ready-data/LISEZMOI.txt  (ou apercus/LISEZMOI.txt)  puis Commit ;
+ouvrir ensuite le dossier et y envoyer les fichiers (Add file > Upload files).
