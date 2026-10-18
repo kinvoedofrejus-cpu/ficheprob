@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dépôt des PDF Fiche Prête (admin)</title>
+<style>
+  body{ font-family: 'Poppins', Arial, sans-serif; max-width:640px; margin:0 auto; padding:16px; background:#f5f6fa; color:#1B2740; }
+  h1{ font-size:18px; } h2{ font-size:14px; margin:0 0 8px; } p{ font-size:13px; color:#555; line-height:1.5; }
+  .card{ background:#fff; border-radius:10px; padding:14px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
+  input, select, button{ width:100%; padding:12px; border-radius:7px; box-sizing:border-box; margin-bottom:8px; font-size:14px; }
+  input, select{ border:1px solid #ccc; background:#fff; }
+  button{ border:none; background:#2557C7; color:#fff; font-weight:600; cursor:pointer; }
+  button.light{ background:#fff; color:#2557C7; border:1.5px solid #2557C7; }
+  button:disabled{ opacity:.5; }
+  .row{ display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid #eee; font-size:13px; gap:8px; }
+  .row:last-child{ border-bottom:none; }
+  .status{ font-weight:600; text-align:right; }
+  .status.ok{ color:#1a9d4b; } .status.err{ color:#c0392b; } .status.pending{ color:#999; } .status.run{ color:#2557C7; }
+  .warn{ font-size:12.5px; color:#b25e00; background:#fff4e0; border-radius:6px; padding:8px 10px; margin:6px 0; }
+  #log{ font-size:12px; color:#555; white-space:pre-wrap; max-height:160px; overflow:auto; background:#fafafa; padding:8px; border-radius:6px; }
+  small{ color:#777; }
+</style>
+</head>
+<body>
+<h1>Dépôt des PDF Fiche Prête</h1>
+<p>
+  Choisis la <b>classe</b>, puis les fichiers <code>.pdf</code> et <code>.meta.json</code> de cette classe
+  (tu peux en sélectionner plusieurs d'un coup, ça marche aussi depuis un téléphone). Chaque fichier doit
+  s'appeler comme la matière dans le catalogue : <code>francais.pdf</code>, <code>francais.meta.json</code>…
+  Un fichier envoyé avec le même nom <b>remplace</b> l'ancien.
+</p>
+
+<div class="card" id="loginCard">
+  <h2>Connexion admin</h2>
+  <input type="email" id="email" placeholder="E-mail admin" autocomplete="username">
+  <input type="password" id="password" placeholder="Mot de passe admin" autocomplete="current-password">
+  <button onclick="doLogin()" id="loginBtn">Se connecter</button>
+  <div id="loginMsg" style="font-size:13px; color:#c0392b;"></div>
+</div>
+
+<div id="mainArea" style="display:none;">
+  <div class="card">
+    <h2>1. Classe</h2>
+    <select id="classeSel" onchange="analyze(); refreshR2();">
+      <option value="CI">CI</option><option value="CP">CP</option><option value="CE1" selected>CE1</option>
+      <option value="CE2">CE2</option><option value="CM1">CM1</option><option value="CM2">CM2</option>
+    </select>
+    <h2 style="margin-top:6px;">2. Fichiers</h2>
+    <input type="file" id="filesInput" multiple onchange="analyze()">
+    <small>Sur ordinateur, tu peux aussi choisir un dossier entier :</small>
+    <input type="file" id="folderInput" webkitdirectory multiple onchange="analyze()" style="margin-top:6px;">
+    <div id="summary"></div>
+    <div id="listBox"></div>
+    <button onclick="startUpload()" id="uploadBtn" disabled>Déposer les fichiers reconnus</button>
+    <div id="progress" style="font-size:13px; margin-top:2px;"></div>
+  </div>
+
+  <div class="card">
+    <h2>Ce qui est actuellement dans R2 (<span id="r2Classe"></span>)</h2>
+    <p style="margin:0 0 8px;">Après un dépôt, la <b>date</b> doit être celle d'aujourd'hui. Sinon le fichier n'a pas été remplacé.</p>
+    <button class="light" onclick="refreshR2()">Actualiser la liste R2</button>
+    <div id="r2List"></div>
+  </div>
+</div>
+
+<div class="card"><div id="log"></div></div>
+
+<script>
+let token = null;
+let queue = [];          // fichiers analysés : { classe, matiere, kind, file, known, status }
+let catalogue = null;    // window.READY_CATALOGUE
+
+function log(msg){
+  const el = document.getElementById('log');
+  el.textContent = (new Date().toLocaleTimeString() + '  ' + msg + '\n') + el.textContent;
+}
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+// Connexion : e-mail + mot de passe saisis (plus aucun identifiant n'est écrit dans cette page).
+document.getElementById('email').value = localStorage.getItem('fpb_upload_email') || '';
+async function doLogin(){
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  const msg = document.getElementById('loginMsg');
+  msg.textContent = '';
+  if(!email || !password){ msg.textContent = 'Saisis ton e-mail et ton mot de passe.'; return; }
+  document.getElementById('loginBtn').disabled = true;
+  try{
+    const res = await fetch('/api/admin-login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email,password}) });
+    const data = await res.json();
+    if(data.ok && data.token){
+      token = data.token;
+      localStorage.setItem('fpb_upload_email', email);
+      document.getElementById('password').value = '';
+      document.getElementById('loginCard').style.display = 'none';
+      document.getElementById('mainArea').style.display = 'block';
+      log('Connecté.');
+      loadCatalogue().then(() => { analyze(); refreshR2(); });
+    } else {
+      msg.textContent = 'Échec de connexion : ' + (data.error || data.reason || 'identifiants refusés.');
+    }
+  }catch(e){
+    msg.textContent = 'Erreur réseau : ' + e.message;
+  }
+  document.getElementById('loginBtn').disabled = false;
+}
+
+// Catalogue déployé : sert à vérifier que les noms de fichiers correspondent aux matières.
+function loadCatalogue(){
+  return new Promise(resolve => {
+    const s = document.createElement('script');
+    s.src = 'ready-data/catalogue.js?t=' + Date.now();
+    s.onload = () => { catalogue = window.READY_CATALOGUE || null; resolve(); };
+    s.onerror = () => { log('Catalogue introuvable : vérification des noms impossible.'); resolve(); };
+    document.head.appendChild(s);
+  });
+}
+
+function parseFile(file, classeSel){
+  const name = file.name;
+  let matiere, kind;
+  if(name.endsWith('.meta.json')){ matiere = name.slice(0, -'.meta.json'.length); kind = 'meta'; }
+  else if(name.endsWith('.pdf')){ matiere = name.slice(0, -'.pdf'.length); kind = 'pdf'; }
+  else return null;
+  // Classe : dossier parent s'il s'agit d'une classe connue, sinon la classe choisie plus haut.
+  let classe = classeSel;
+  const parts = (file.webkitRelativePath || '').split('/');
+  if(parts.length >= 2){
+    const parent = parts[parts.length - 2];
+    if(catalogue ? !!catalogue[parent] : /^(CI|CP|CE1|CE2|CM1|CM2)$/.test(parent)) classe = parent;
+  }
+  // « CE1-francais.pdf » (nom d'aperçu) -> « francais »
+  if(matiere.startsWith(classe + '-')) matiere = matiere.slice(classe.length + 1);
+  if(!classe || !matiere) return null;
+  const known = catalogue && catalogue[classe] ? !!catalogue[classe][matiere] : null;
+  return { classe, matiere, kind, file, known, status: 'pending' };
+}
+
+function analyze(){
+  const classeSel = document.getElementById('classeSel').value;
+  const files = Array.from(document.getElementById('filesInput').files || []).concat(Array.from(document.getElementById('folderInput').files || []));
+  queue = files.map(f => parseFile(f, classeSel)).filter(Boolean);
+  const box = document.getElementById('listBox'), sum = document.getElementById('summary');
+  const btn = document.getElementById('uploadBtn');
+  if(!queue.length){
+    sum.innerHTML = files.length ? '<div class="warn">Aucun fichier .pdf ou .meta.json reconnu dans la sélection.</div>' : '';
+    box.innerHTML = ''; btn.disabled = true; return;
+  }
+  const bad = queue.filter(q => q.known === false);
+  const keys = {};
+  queue.forEach(q => { (keys[q.classe + '/' + q.matiere] = keys[q.classe + '/' + q.matiere] || {})[q.kind] = true; });
+  const incomplete = Object.keys(keys).filter(k => !(keys[k].pdf && keys[k].meta));
+  let html = '';
+  if(bad.length) html += '<div class="warn">⚠ Nom inconnu dans le catalogue (non déposé) : ' + esc(Array.from(new Set(bad.map(b => b.classe + '/' + b.matiere))).join(', ')) + '. Renomme le fichier comme la matière du catalogue.</div>';
+  if(incomplete.length) html += '<div class="warn">⚠ Il manque le .pdf ou le .meta.json pour : ' + esc(incomplete.join(', ')) + '. Les deux doivent être déposés ensemble.</div>';
+  sum.innerHTML = html;
+  box.innerHTML = queue.map((it, i) => rowHtml(it, i)).join('');
+  btn.disabled = !queue.some(q => q.known !== false);
+}
+function rowHtml(it, i){
+  const st = it.known === false ? 'err' : it.status;
+  const label = it.known === false ? 'nom inconnu' : st==='ok' ? 'OK' : st==='err' ? 'Erreur' : st==='run' ? 'Envoi…' : 'prêt';
+  return '<div class="row" id="row-'+i+'"><span>'+esc(it.classe)+' / '+esc(it.matiere)+' ('+it.kind+')<br><small>'+(it.file.size/1048576).toFixed(1)+' Mo</small></span><span class="status '+st+'" id="st-'+i+'">'+label+'</span></div>';
+}
+function setStatus(i, st, label){
+  queue[i].status = st;
+  const el = document.getElementById('st-' + i);
+  if(el){ el.className = 'status ' + st; el.textContent = label || (st==='ok' ? 'OK' : st==='err' ? 'Erreur' : 'Envoi…'); }
+}
+
+async function startUpload(){
+  if(!token){ alert("Connecte-toi d'abord."); return; }
+  const todo = queue.map((it, i) => ({ it, i })).filter(x => x.it.known !== false);
+  if(!todo.length) return;
+  document.getElementById('uploadBtn').disabled = true;
+  let ok = 0, errors = 0;
+  for(let n = 0; n < todo.length; n++){
+    const { it, i } = todo[n];
+    setStatus(i, 'run', 'Envoi…');
+    document.getElementById('progress').textContent = 'Fichier ' + (n+1) + '/' + todo.length;
+    try{
+      const fd = new FormData();
+      fd.append('token', token);
+      fd.append('classe', it.classe);
+      fd.append('matiere', it.matiere);
+      fd.append('kind', it.kind);
+      fd.append('file', it.file);
+      const res = await fetch('/api/admin-upload-readyfiche-pdf', { method:'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if(res.ok && data.ok){
+        setStatus(i, 'ok'); ok++;
+        log(it.classe+'/'+it.matiere+'.'+(it.kind==='pdf'?'pdf':'meta.json')+' déposé.');
+      } else {
+        setStatus(i, 'err'); errors++;
+        log(it.classe+'/'+it.matiere+' ERREUR : '+(data.error||data.reason||('code '+res.status)));
+      }
+    }catch(e){
+      setStatus(i, 'err'); errors++;
+      log(it.classe+'/'+it.matiere+' ERREUR réseau : '+e.message);
+    }
+  }
+  document.getElementById('progress').textContent = 'Terminé : '+ok+'/'+todo.length+' déposés, '+errors+' erreur(s).';
+  document.getElementById('uploadBtn').disabled = false;
+  refreshR2();
+}
+
+async function refreshR2(){
+  if(!token) return;
+  const classe = document.getElementById('classeSel').value;
+  document.getElementById('r2Classe').textContent = classe;
+  const box = document.getElementById('r2List');
+  box.innerHTML = '<p>Chargement…</p>';
+  try{
+    const res = await fetch('/api/admin-list-readyfiche-pdfs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ token, classe }) });
+    const data = await res.json();
+    if(!res.ok || !data.ok) throw new Error(data.error || data.reason || ('code ' + res.status));
+    const today = new Date().toDateString();
+    box.innerHTML = data.objects.length ? data.objects.map(o => {
+      const d = new Date(o.uploaded);
+      const fresh = d.toDateString() === today;
+      return '<div class="row"><span>'+esc(o.key.replace('readyfiche-pdfs/',''))+'<br><small>'+(o.size/1048576).toFixed(2)+' Mo</small></span>'
+        + '<span class="status '+(fresh?'ok':'pending')+'">'+d.toLocaleDateString('fr-FR')+' '+d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+'</span></div>';
+    }).join('') : '<p>Aucun fichier pour cette classe dans R2.</p>';
+  }catch(e){
+    box.innerHTML = '<p style="color:#c0392b;">Impossible de lister R2 : '+esc(e.message)+'</p>';
+  }
+}
+</script>
+</body>
+</html>
