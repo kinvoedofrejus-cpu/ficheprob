@@ -1,0 +1,169 @@
+import {
+  PLANS, normalizePhone, json,
+  getUser, upsertUser, getTx, upsertTx, generateUniqueCode,
+  addResumePurchase, addReadyFichePurchase, addResourcePurchase,
+  ensureDownloadTables, addCredits, MIN_PLAN_INDEX, getMinPlanBonus
+} from './_shared.js';
+import { applyPaperPayment } from './_paper.js';
+
+/* Traitement d'une transaction FedaPay APPROUVÉE (abonnement, résumés, ressources, commande papier, Fiche Prête).
+   Utilisé par le webhook ET par la vérification active de /api/payment-status (quand le webhook tarde ou n'arrive pas).
+   Idempotent : une transaction déjà marquée « paid » n'est jamais traitée deux fois. */
+function planIndexFromAmount(amount) {
+  return PLANS.findIndex(p => p.amount === amount);
+}
+
+export async function processApprovedTransaction(db, tx) {
+
+      // Déjà traité ? (FedaPay peut renvoyer le même webhook plusieurs fois)
+      const already = await getTx(db, tx.id);
+
+      // Réservation de type "résumés" (achat d'une matière complète via
+      // create-resume-payment.js) : traitement dédié, distinct de l'abonnement.
+      if (already && already.type === 'resume') {
+        if (already.status !== 'paid') {
+          await addResumePurchase(db, already.phone, already.classe, already.matiere, tx.id);
+          await upsertTx(db, tx.id, { ...already, status: 'paid', paidAt: Date.now() });
+          console.log(`✅ Paiement résumé confirmé — transaction ${tx.id} — ${already.phone} — ${already.matiere} (${already.classe})`);
+        }
+        return json({ received: true });
+      }
+
+      // Réservation "crédits de téléchargement de ressources" (create-resource-payment.js) :
+      // owner dans "phone", nombre de crédits dans "matiere".
+      if (already && already.type === 'credits') {
+        if (already.status !== 'paid') {
+          await ensureDownloadTables(db);
+          await addCredits(db, already.phone, Number(already.matiere) || 0);
+          await upsertTx(db, tx.id, { ...already, status: 'paid', paidAt: Date.now() });
+          console.log(`✅ Paiement crédits confirmé — transaction ${tx.id} — ${already.phone} — ${already.matiere} crédit(s)`);
+        }
+        return json({ received: true });
+      }
+
+      // Réservation "ressource didactique" (ancien achat à l'unité, create-resource-payment.js) : l'id de
+      // la ressource est stocké dans la colonne "matiere".
+      if (already && already.type === 'resource') {
+        if (already.status !== 'paid') {
+          await addResourcePurchase(db, already.phone, already.matiere, tx.id);
+          await upsertTx(db, tx.id, { ...already, status: 'paid', paidAt: Date.now() });
+          console.log(`✅ Paiement ressource confirmé — transaction ${tx.id} — ${already.phone} — ${already.matiere}`);
+        }
+        return json({ received: true });
+      }
+
+      // Réservation "commande papier" (pay-paper-order.js) : l'identifiant de la commande est dans « matiere »,
+      // le montant payé dans « amount » (acompte ou solde) ; il s'ajoute au « payé » de la commande.
+      if (already && already.type === 'paperorder') {
+        if (already.status !== 'paid') {
+          await applyPaperPayment(db, already.matiere, already.amount);
+          await upsertTx(db, tx.id, { ...already, status: 'paid', paidAt: Date.now() });
+          console.log(`✅ Paiement commande papier confirmé — transaction ${tx.id} — commande ${already.matiere} — ${already.amount} F`);
+        }
+        return json({ received: true });
+      }
+
+      // Réservation "Fiche Prête" (create-readyfiche-payment.js) : débloque
+      // soit une matière, soit toute la classe (matiere === '*').
+      if (already && already.type === 'readyfiche') {
+        if (already.status !== 'paid') {
+          // Achat sans compte (tier 'guest') : le droit est porté par la transaction elle-même (voir checkGuestReadyFiche).
+          if (already.tier !== 'guest') await addReadyFichePurchase(db, already.phone, already.classe, already.matiere, already.tier, tx.id);
+          await upsertTx(db, tx.id, { ...already, status: 'paid', paidAt: Date.now() });
+          console.log(`✅ Paiement Fiche Prête confirmé — transaction ${tx.id} — ${already.phone} — ${already.matiere} (${already.classe})`);
+        }
+        return json({ received: true });
+      }
+
+      if (already && already.status === 'paid') {
+        return json({ received: true });
+      }
+
+      // Cas 1 : transaction créée via notre bouton "Payer automatiquement"
+      // (réservation préalable avec planIndex + téléphone par create-payment.js)
+      let planIndex = already ? already.planIndex : undefined;
+      let phone = already ? already.phone : undefined;
+      let nom = already ? already.nom : undefined;
+      let prenom = already ? already.prenom : undefined;
+
+      // Cas 2 : transaction créée depuis un lien de paiement fixe FedaPay —
+      // pas de réservation préalable, on retrouve le plan par le montant payé
+      // et les infos client directement dans la transaction FedaPay.
+      if (planIndex === undefined || planIndex === null) {
+        planIndex = planIndexFromAmount(tx.amount);
+      }
+      if (!phone && tx.customer && tx.customer.phone_number) {
+        phone = normalizePhone(tx.customer.phone_number.number || tx.customer.phone_number);
+      }
+      if (!nom && tx.customer) nom = tx.customer.lastname || tx.customer.last_name || '';
+      if (!prenom && tx.customer) prenom = tx.customer.firstname || tx.customer.first_name || '';
+
+      if (planIndex === -1 || planIndex === undefined || !PLANS[planIndex]) {
+        console.error('Webhook: plan introuvable pour ce paiement (montant:', tx.amount, ')');
+        await upsertTx(db, tx.id, { status: 'paid_unmatched', amount: tx.amount, createdAt: Date.now() });
+        return json({ received: true });
+      }
+      if (!phone || normalizePhone(phone).length < 8) {
+        console.error('Webhook: numéro de téléphone manquant/invalide pour la transaction', tx.id);
+        await upsertTx(db, tx.id, { status: 'paid_unmatched', planIndex, amount: tx.amount, createdAt: Date.now() });
+        return json({ received: true });
+      }
+
+      const phoneDigits = normalizePhone(phone);
+      const plan = PLANS[planIndex];
+
+      const existingUser = await getUser(db, phoneDigits);
+      const code = await generateUniqueCode(db, 8);
+      if (!code) {
+        console.error('Webhook: impossible de générer un code unique');
+        return json({ received: true });
+      }
+
+      const now = Date.now();
+      const expiryTs = now + plan.days * 86400000;
+
+      // Bonus automatique (onglet "Abonnements" du dashboard admin) : offert
+      // uniquement sur la formule la moins chère, en plus de son quota normal.
+      let quotaTotal = plan.quota;
+      if (planIndex === MIN_PLAN_INDEX) {
+        const bonus = await getMinPlanBonus(db);
+        if (bonus) quotaTotal += bonus;
+      }
+
+      const userRecord = {
+        phone: phoneDigits,
+        nom: nom || (existingUser ? existingUser.nom : '') || 'Client',
+        prenom: prenom || (existingUser ? existingUser.prenom : '') || '',
+        code,
+        planIndex,
+        planLabel: plan.label,
+        classe: existingUser ? existingUser.classe : null,
+        expiryTs,
+        quotaTotal,
+        quotaUsed: existingUser ? existingUser.quotaUsed || 0 : 0,
+        active: true,
+        createdAt: existingUser ? existingUser.createdAt : now,
+        updatedAt: now,
+        history: [
+          ...((existingUser && existingUser.history) || []),
+          { code, planLabel: plan.label, expiryTs, generatedAt: now, source: 'fedapay' }
+        ]
+      };
+
+      await upsertUser(db, userRecord);
+
+      await upsertTx(db, tx.id, {
+        source: 'fedapay',
+        status: 'paid',
+        planIndex,
+        phone: phoneDigits,
+        nom: userRecord.nom,
+        prenom: userRecord.prenom,
+        amount: tx.amount,
+        code,
+        paidAt: now,
+        createdAt: now
+      });
+
+      console.log(`✅ Paiement confirmé — transaction ${tx.id} — compte ${phoneDigits} — code ${code}`);
+}
