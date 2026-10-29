@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dépôt des Word Fiche Prête (admin)</title>
+<style>
+  body{ font-family: 'Poppins', Arial, sans-serif; max-width:640px; margin:0 auto; padding:16px; background:#f5f6fa; color:#1B2740; }
+  h1{ font-size:18px; } h2{ font-size:14px; margin:0 0 8px; } p{ font-size:13px; color:#555; line-height:1.5; }
+  .card{ background:#fff; border-radius:10px; padding:14px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
+  input, select, button{ width:100%; padding:12px; border-radius:7px; box-sizing:border-box; margin-bottom:8px; font-size:14px; }
+  input, select{ border:1px solid #ccc; background:#fff; }
+  button{ border:none; background:#2557C7; color:#fff; font-weight:600; cursor:pointer; }
+  button.light{ background:#fff; color:#2557C7; border:1.5px solid #2557C7; }
+  button:disabled{ opacity:.5; }
+  .row{ display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid #eee; font-size:13px; gap:8px; }
+  .row:last-child{ border-bottom:none; }
+  .ok{ color:#1a9d4b; font-weight:600; } .miss{ color:#c0392b; font-weight:600; } .old{ color:#999; }
+  #log{ font-size:12px; color:#555; white-space:pre-wrap; max-height:160px; overflow:auto; background:#fafafa; padding:8px; border-radius:6px; }
+  small{ color:#777; }
+</style>
+</head>
+<body>
+<h1>Dépôt des Word Fiche Prête</h1>
+<p>
+  Choisis <b>un ou plusieurs fichiers .docx</b> (nouveau modèle) : la page <b>reconnaît toute seule</b> la classe et la matière
+  (colonne « COURS » du fichier, titre et nombre de fiches), tu n'as rien à renommer. Vérifie la ligne de chaque fichier, corrige
+  si besoin avec les listes, puis dépose. Un fichier envoyé pour la même classe/matière <b>remplace</b> l'ancien.
+  Le choix « Word » n'apparaît dans l'application que pour les matières déposées ici.
+</p>
+
+<div class="card" id="loginCard">
+  <h2>Connexion admin</h2>
+  <input type="email" id="email" placeholder="E-mail admin" autocomplete="username">
+  <input type="password" id="password" placeholder="Mot de passe admin" autocomplete="current-password">
+  <button onclick="doLogin()" id="loginBtn">Se connecter</button>
+  <div id="loginMsg" style="font-size:13px; color:#c0392b;"></div>
+</div>
+
+<div id="mainArea" style="display:none;">
+  <div class="card">
+    <h2>1. Fichiers Word</h2>
+    <input type="file" id="fileInput" multiple accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onchange="analyze()">
+    <div id="listBox"></div>
+    <button onclick="startUpload()" id="uploadBtn" disabled>Déposer les fichiers</button>
+    <div id="progress" style="font-size:13px; margin-top:2px;"></div>
+  </div>
+
+  <div class="card">
+    <h2>2. Classe à consulter</h2>
+    <select id="classeSel" onchange="refreshR2()">
+      <option value="CI">CI</option><option value="CP">CP</option><option value="CE1" selected>CE1</option>
+      <option value="CE2">CE2</option><option value="CM1">CM1</option><option value="CM2">CM2</option>
+    </select>
+  </div>
+
+  <div class="card">
+    <h2>État de <span id="r2Classe"></span> : matières avec / sans Word</h2>
+    <p style="margin:0 0 8px;">Après un dépôt, la ligne doit passer en vert avec la date d'aujourd'hui.</p>
+    <button class="light" onclick="refreshR2()">Actualiser</button>
+    <div id="r2List"></div>
+  </div>
+</div>
+
+<div class="card"><div id="log"></div></div>
+
+<script src="ready-docx.js?v=6"></script>
+<script>
+let token = null;
+let queue = [];   // { file, classe, matiere, title, count, note, status }
+let catalogue = null;
+
+function log(msg){
+  const el = document.getElementById('log');
+  el.textContent = (new Date().toLocaleTimeString() + '  ' + msg + '\n') + el.textContent;
+}
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+document.getElementById('email').value = localStorage.getItem('fpb_upload_email') || '';
+async function doLogin(){
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  const msg = document.getElementById('loginMsg');
+  msg.textContent = '';
+  if(!email || !password){ msg.textContent = 'Saisis ton e-mail et ton mot de passe.'; return; }
+  document.getElementById('loginBtn').disabled = true;
+  try{
+    const res = await fetch('/api/admin-login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email,password}) });
+    const data = await res.json();
+    if(data.ok && data.token){
+      token = data.token;
+      localStorage.setItem('fpb_upload_email', email);
+      document.getElementById('password').value = '';
+      document.getElementById('loginCard').style.display = 'none';
+      document.getElementById('mainArea').style.display = 'block';
+      log('Connecté.');
+      loadCatalogue().then(() => { analyze(); refreshR2(); });
+    } else {
+      msg.textContent = 'Échec de connexion : ' + (data.error || data.reason || 'identifiants refusés.');
+    }
+  }catch(e){ msg.textContent = 'Erreur réseau : ' + e.message; }
+  document.getElementById('loginBtn').disabled = false;
+}
+
+function loadCatalogue(){
+  return new Promise(resolve => {
+    const s = document.createElement('script');
+    s.src = 'ready-data/catalogue.js?t=' + Date.now();
+    s.onload = () => { catalogue = window.READY_CATALOGUE || null; resolve(); };
+    s.onerror = () => { log('Catalogue introuvable.'); resolve(); };
+    document.head.appendChild(s);
+  });
+}
+const CLASSES = ['CI','CP','CE1','CE2','CM1','CM2'];
+function norm(t){ return String(t||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9 ]+/g,' ').replace(/\s+/g,' ').trim(); }
+function tokens(t){ return norm(t).split(' ').filter(w => w.length > 2 && !['DE','DES','LES','LA','LE','FICHE','PREPARATION','PERIODE','ET','DU','EST'].includes(w) || w === 'EST'); }
+// Reconnaissance : le nombre de fiches du fichier est comparé à celui du catalogue (presque unique dans une classe), puis le titre départage.
+function guessMatiere(classe, title, count){
+  const c = (catalogue && catalogue[classe]) || {};
+  const keys = Object.keys(c);
+  if(!keys.length) return { key:'', note:'catalogue introuvable' };
+  const tt = new Set(tokens(title));
+  const score = k => { const lt = tokens(c[k].matiereLabel); if(!lt.length) return 0; return lt.filter(w => tt.has(w)).length / lt.length; };
+  let cand = keys.filter(k => Number(c[k].count) === count);
+  if(cand.length === 1) return { key: cand[0], note:'' };
+  if(cand.length > 1){ cand.sort((a,b) => score(b) - score(a)); return { key: cand[0], note: cand.length + ' matières ont ' + count + ' fiches : vérifie' }; }
+  keys.sort((a,b) => score(b) - score(a));
+  const top = keys[0];
+  return { key: score(top) > 0 ? top : '', note: 'nombre de fiches différent du catalogue (' + count + ' ≠ ' + (top && c[top].count) + ') : vérifie' };
+}
+async function analyze(){
+  const files = Array.from(document.getElementById('fileInput').files || []).filter(f => /\.docx$/i.test(f.name));
+  queue = [];
+  const box = document.getElementById('listBox');
+  box.innerHTML = files.length ? '<p>Lecture des fichiers…</p>' : '';
+  for(const file of files){
+    const q = { file, classe:'', matiere:'', title:'', count:0, note:'', status:'pending' };
+    try{
+      const info = await FPBDocx.inspect(await file.arrayBuffer());
+      q.title = info.title; q.count = info.count; q.classe = info.classe || '';
+      if(!q.classe) q.note = 'classe non reconnue : choisis-la';
+      else { const g = guessMatiere(q.classe, info.title, info.count); q.matiere = g.key; q.note = g.note; }
+    }catch(e){ q.note = 'fichier illisible : ' + e.message; q.status = 'err'; }
+    queue.push(q);
+  }
+  render();
+}
+function matiereOptions(classe, sel){
+  const c = (catalogue && catalogue[classe]) || {};
+  return '<option value="">— choisir —</option>' + Object.keys(c).map(k => '<option value="'+esc(k)+'"'+(k===sel?' selected':'')+'>'+esc(c[k].matiereLabel)+' ('+c[k].count+' fiches)</option>').join('');
+}
+function render(){
+  const box = document.getElementById('listBox');
+  if(!queue.length){ box.innerHTML = ''; document.getElementById('uploadBtn').disabled = true; return; }
+  const seen = {}; queue.forEach(q => { if(q.classe && q.matiere){ const k = q.classe+'/'+q.matiere; seen[k] = (seen[k]||0)+1; } });
+  box.innerHTML = queue.map((q, i) => {
+    const dup = q.classe && q.matiere && seen[q.classe+'/'+q.matiere] > 1;
+    const ready = q.classe && q.matiere && q.status !== 'err';
+    const st = q.status === 'ok' ? '<span class="ok">✔ déposé</span>' : q.status === 'run' ? '<span>envoi…</span>' : q.status === 'fail' ? '<span class="miss">échec</span>' : '';
+    return '<div style="border-top:1px solid #eee; padding:8px 0;">'
+      + '<div style="font-size:13px;"><b>'+esc(q.file.name)+'</b> <small>('+(q.file.size/1048576).toFixed(1)+' Mo · '+q.count+' fiches)</small> '+st+'</div>'
+      + '<small>'+esc(q.title)+'</small>'
+      + (q.note ? '<div class="warn">'+esc(q.note)+'</div>' : '')
+      + (dup ? '<div class="warn">⚠ Deux fichiers visent la même matière : seul le dernier restera.</div>' : '')
+      + '<select onchange="setClasse('+i+',this.value)"><option value="">— classe —</option>'+CLASSES.map(c => '<option'+(c===q.classe?' selected':'')+'>'+c+'</option>').join('')+'</select>'
+      + '<select onchange="setMatiere('+i+',this.value)">'+matiereOptions(q.classe, q.matiere)+'</select>'
+      + '</div>';
+  }).join('');
+  document.getElementById('uploadBtn').disabled = !queue.some(q => q.classe && q.matiere && q.status !== 'err' && q.status !== 'ok');
+}
+function setClasse(i, v){ queue[i].classe = v; queue[i].matiere = v ? guessMatiere(v, queue[i].title, queue[i].count).key : ''; queue[i].note = ''; render(); }
+function setMatiere(i, v){ queue[i].matiere = v; queue[i].note = ''; render(); }
+
+async function startUpload(){
+  if(!token){ alert("Connecte-toi d'abord."); return; }
+  const todo = queue.filter(q => q.classe && q.matiere && q.status !== 'err' && q.status !== 'ok');
+  if(!todo.length) return;
+  document.getElementById('uploadBtn').disabled = true;
+  let ok = 0;
+  for(let n = 0; n < todo.length; n++){
+    const q = todo[n];
+    q.status = 'run'; render();
+    document.getElementById('progress').textContent = 'Fichier ' + (n+1) + '/' + todo.length + '…';
+    try{
+      const fd = new FormData();
+      fd.append('token', token); fd.append('classe', q.classe); fd.append('matiere', q.matiere); fd.append('kind', 'docx'); fd.append('file', q.file);
+      const res = await fetch('/api/admin-upload-readyfiche-pdf', { method:'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if(res.ok && data.ok){ q.status = 'ok'; ok++; log(q.classe+'/'+q.matiere+'.docx déposé.'); }
+      else { q.status = 'fail'; log(q.classe+'/'+q.matiere+' ERREUR : '+(data.error||data.reason||('code '+res.status))); }
+    }catch(e){ q.status = 'fail'; log(q.classe+'/'+q.matiere+' ERREUR réseau : '+e.message); }
+    render();
+  }
+  document.getElementById('progress').textContent = 'Terminé : ' + ok + '/' + todo.length + ' déposé(s).';
+  const last = todo[todo.length-1]; if(last && last.classe) document.getElementById('classeSel').value = last.classe;
+  refreshR2();
+}
+
+async function refreshR2(){
+  if(!token) return;
+  const classe = document.getElementById('classeSel').value;
+  document.getElementById('r2Classe').textContent = classe;
+  const box = document.getElementById('r2List');
+  box.innerHTML = '<p>Chargement…</p>';
+  try{
+    const res = await fetch('/api/admin-list-readyfiche-pdfs', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ token, classe, kind:'docx' }) });
+    const data = await res.json();
+    if(!res.ok || !data.ok) throw new Error(data.error || data.reason || ('code ' + res.status));
+    const byKey = {};
+    data.objects.forEach(o => { const m = /\/([^/]+)\.docx$/.exec(o.key); if(m) byKey[m[1]] = o; });
+    const c = (catalogue && catalogue[classe]) || {};
+    const today = new Date().toDateString();
+    const keys = Object.keys(c);
+    Object.keys(byKey).forEach(k => { if(!keys.includes(k)) keys.push(k); });
+    box.innerHTML = keys.length ? keys.map(k => {
+      const o = byKey[k];
+      const label = esc((c[k] && c[k].matiereLabel) || k);
+      if(!o) return '<div class="row"><span>'+label+'<br><small>'+esc(k)+'</small></span><span class="miss">pas de Word</span></div>';
+      const d = new Date(o.uploaded);
+      const fresh = d.toDateString() === today;
+      return '<div class="row"><span>'+label+'<br><small>'+esc(k)+' · '+(o.size/1048576).toFixed(2)+' Mo'+(c[k] ? '' : ' · hors catalogue')+'</small></span>'
+        + '<span class="'+(fresh?'ok':'old')+'">✔ '+d.toLocaleDateString('fr-FR')+' '+d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+'</span></div>';
+    }).join('') : '<p>Aucune matière.</p>';
+  }catch(e){
+    box.innerHTML = '<p style="color:#c0392b;">Impossible de lister R2 : '+esc(e.message)+'</p>';
+  }
+}
+</script>
+</body>
+</html>
