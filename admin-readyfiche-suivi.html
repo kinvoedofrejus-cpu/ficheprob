@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Suivi Fiche Prête</title>
+<style>
+  body{ font-family:'Poppins',Arial,sans-serif; max-width:720px; margin:0 auto; padding:16px; background:#f5f6fa; color:#1B2740; }
+  h1{ font-size:18px; } h2{ font-size:14px; margin:0 0 8px; } p{ font-size:13px; color:#555; line-height:1.5; }
+  .card{ background:#fff; border-radius:10px; padding:14px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
+  input, select, button{ width:100%; padding:12px; border-radius:7px; box-sizing:border-box; margin-bottom:8px; font-size:14px; }
+  input, select{ border:1px solid #ccc; background:#fff; }
+  button{ border:none; background:#2557C7; color:#fff; font-weight:600; cursor:pointer; }
+  button.light{ background:#fff; color:#2557C7; border:1.5px solid #2557C7; }
+  .tabs{ display:flex; gap:8px; } .tabs button{ margin:0 0 14px; }
+  .kpis{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .kpi{ background:#f0f4ff; border-radius:8px; padding:10px; } .kpi b{ display:block; font-size:18px; } .kpi span{ font-size:11.5px; color:#555; }
+  table{ width:100%; border-collapse:collapse; font-size:12.5px; } td,th{ padding:5px 4px; border-bottom:1px solid #eee; text-align:left; } th{ color:#777; font-weight:600; } td.r,th.r{ text-align:right; }
+  #msg{ font-size:13px; color:#c0392b; }
+</style>
+</head>
+<body>
+<h1>Suivi Fiche Prête</h1>
+<div class="card" id="loginCard">
+  <input id="email" type="email" placeholder="E-mail admin" autocomplete="username">
+  <input id="password" type="password" placeholder="Mot de passe" autocomplete="current-password">
+  <button id="loginBtn" onclick="doLogin()">Se connecter</button>
+  <div id="msg"></div>
+</div>
+<div id="main" style="display:none">
+  <div class="tabs"><button id="tabS" onclick="tab('s')">Statistiques</button><button id="tabV" class="light" onclick="tab('v')">Versions corrigées</button></div>
+  <div id="paneS">
+    <select id="days" onchange="loadStats()"><option value="7">7 derniers jours</option><option value="30" selected>30 derniers jours</option><option value="90">90 derniers jours</option><option value="365">12 derniers mois</option></select>
+    <div id="stats"></div>
+  </div>
+  <div id="paneV" style="display:none">
+    <div class="card">
+      <h2>Publier une version corrigée</h2>
+      <p>Les acheteurs qui avaient déjà téléchargé cette fiche retrouvent <b>un téléchargement gratuit</b> de la nouvelle version (ils voient le badge « Version corrigée »). Dépose d'abord le fichier corrigé (PDF ou Word), puis publie ici.</p>
+      <select id="vClasse"></select>
+      <select id="vMatiere"></select>
+      <input id="vNote" placeholder="Note affichée aux acheteurs (ex. : correction de l'exercice 3)" maxlength="140">
+      <button onclick="bump()">Publier la version corrigée</button>
+    </div>
+    <div class="card"><h2>Déjà publiées</h2><div id="vList"></div></div>
+  </div>
+</div>
+<script src="ready-data/catalogue.js"></script>
+<script>
+let token = null;
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const F = n => String(Math.round(n||0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' F';
+$('email').value = localStorage.getItem('fpb_upload_email') || '';
+async function api(body){
+  const r = await fetch('/api/admin-readyfiche-suivi', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ token, ...body }) });
+  return r.json();
+}
+async function doLogin(){
+  const email = $('email').value.trim(), password = $('password').value;
+  if(!email || !password){ $('msg').textContent = 'Saisis ton e-mail et ton mot de passe.'; return; }
+  try{
+    const r = await fetch('/api/admin-login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email, password }) });
+    const d = await r.json();
+    if(d.ok && d.token){ token = d.token; localStorage.setItem('fpb_upload_email', email); $('loginCard').style.display = 'none'; $('main').style.display = 'block'; initVersions(); loadStats(); }
+    else $('msg').textContent = 'Échec de connexion.';
+  }catch(e){ $('msg').textContent = 'Erreur réseau : ' + e.message; }
+}
+function tab(t){
+  $('paneS').style.display = t === 's' ? '' : 'none'; $('paneV').style.display = t === 'v' ? '' : 'none';
+  $('tabS').className = t === 's' ? '' : 'light'; $('tabV').className = t === 'v' ? '' : 'light';
+  if(t === 'v') loadVersions();
+}
+function tbl(head, rows){ return '<table><tr>' + head.map((h,i) => `<th class="${i?'r':''}">${h}</th>`).join('') + '</tr>' + (rows.length ? rows.map(r => '<tr>' + r.map((c,i) => `<td class="${i?'r':''}">${c}</td>`).join('') + '</tr>').join('') : '<tr><td colspan="9">—</td></tr>') + '</table>'; }
+async function loadStats(){
+  $('stats').innerHTML = '<p>Chargement…</p>';
+  const d = await api({ action:'stats', days: Number($('days').value) });
+  if(!d.ok){ $('stats').innerHTML = '<p>Erreur : ' + esc(d.error || d.reason || '') + '</p>'; return; }
+  const s = d.sales, ev = d.events, evC = d.evClasse;
+  const sum = pre => Object.keys(evC).filter(k => k.startsWith(pre + '|')).reduce((a,k) => a + evC[k], 0);
+  const prev = sum('preview') + sum('preview_word'), dlP = sum('dl_pdf'), dlW = sum('dl_word');
+  const conv = prev ? Math.round(s.count / prev * 1000) / 10 + ' %' : '—';
+  let h = `<div class="card"><div class="kpis">
+    <div class="kpi"><b>${F(s.total)}</b><span>Chiffre d'affaires</span></div>
+    <div class="kpi"><b>${s.count}</b><span>Achats</span></div>
+    <div class="kpi"><b>${dlP + dlW}</b><span>Téléchargements (PDF ${dlP} · Word ${dlW})</span></div>
+    <div class="kpi"><b>${prev}</b><span>Aperçus (PDF ${sum('preview')} · Word ${sum('preview_word')})</span></div>
+    <div class="kpi"><b>${conv}</b><span>Aperçus → achats (indicatif)</span></div>
+    <div class="kpi"><b>${s.byTier.classe.n}</b><span>Forfaits « toute la classe »</span></div>
+  </div></div>`;
+  h += `<div class="card"><h2>PDF et Word</h2>${tbl(['Format','Achats','Montant'], [['PDF', s.byFormat.pdf.n, F(s.byFormat.pdf.amount)], ['Word', s.byFormat.word.n, F(s.byFormat.word.amount)]])}</div>`;
+  h += `<div class="card"><h2>Par classe</h2>${tbl(['Classe','Achats','Forfaits','Montant','Aperçus'], Object.keys(s.byClasse).sort().map(c => [c, s.byClasse[c].n, s.byClasse[c].forfait, F(s.byClasse[c].amount), (evC['preview|'+c]||0) + (evC['preview_word|'+c]||0)]))}</div>`;
+  h += `<div class="card"><h2>Matières les plus vendues</h2>${tbl(['Matière','Achats','Montant'], Object.entries(s.byMatiere).sort((a,b) => b[1].n - a[1].n).slice(0,15).map(([k,v]) => [esc(k.replace('::',' · ')), v.n, F(v.amount)]))}</div>`;
+  const pm = {}; Object.keys(ev).forEach(k => { const [e,c,m] = k.split('|'); if(e === 'preview' || e === 'preview_word'){ pm[c+'::'+m] = (pm[c+'::'+m]||0) + ev[k]; } });
+  h += `<div class="card"><h2>Matières les plus consultées (aperçus)</h2>${tbl(['Matière','Aperçus','Achats'], Object.entries(pm).sort((a,b) => b[1]-a[1]).slice(0,15).map(([k,n]) => [esc(k.replace('::',' · ')), n, (s.byMatiere[k]||{n:0}).n]))}</div>`;
+  h += `<div class="card"><h2>Par jour</h2>${tbl(['Jour','Achats','Montant'], Object.keys(s.byDay).sort().reverse().slice(0,31).map(k => [k, s.byDay[k].n, F(s.byDay[k].amount)]))}</div>`;
+  $('stats').innerHTML = h;
+}
+let CAT = null;
+function initVersions(){
+  try{ CAT = window.READY_CATALOGUE || null; }catch(e){}
+  const c = $('vClasse');
+  if(!CAT){ c.innerHTML = '<option value="">Catalogue indisponible</option>'; return; }
+  c.innerHTML = Object.keys(CAT).map(k => `<option>${k}</option>`).join('');
+  c.onchange = fillMat; fillMat();
+}
+function fillMat(){ const m = CAT[$('vClasse').value] || {}; $('vMatiere').innerHTML = Object.keys(m).map(k => `<option value="${k}">${esc(m[k].matiereLabel || k)}</option>`).join(''); }
+async function loadVersions(){
+  const d = await api({ action:'versions' });
+  const v = (d && d.versions) || {};
+  $('vList').innerHTML = tbl(['Matière','Version','Date / note'], Object.entries(v).map(([k,x]) => [esc(k.replace('::',' · ')), x.v, new Date(x.updatedAt).toLocaleDateString('fr-FR') + (x.note ? ' — ' + esc(x.note) : '')]));
+}
+async function bump(){
+  const classe = $('vClasse').value, matiere = $('vMatiere').value;
+  if(!classe || !matiere) return;
+  if(!confirm(`Publier une version corrigée pour ${classe} · ${matiere} ?\nLes acheteurs qui l'ont déjà téléchargée pourront la retélécharger gratuitement.`)) return;
+  const d = await api({ action:'bump', classe, matiere, note: $('vNote').value.trim() });
+  if(d.ok){ $('vNote').value = ''; loadVersions(); alert('Version corrigée publiée.'); } else alert('Erreur : ' + (d.error || d.reason || ''));
+}
+</script>
+</body>
+</html>

@@ -64,7 +64,7 @@
 
 <div class="card"><div id="log"></div></div>
 
-<script src="ready-docx.js?v=6"></script>
+<script src="ready-docx.js?v=8"></script>
 <script>
 let token = null;
 let queue = [];   // { file, classe, matiere, title, count, note, status }
@@ -111,7 +111,7 @@ function loadCatalogue(){
     document.head.appendChild(s);
   });
 }
-const CLASSES = ['CI','CP','CE1','CE2','CM1','CM2'];
+const CLASSES = ['MATERNELLE','CI','CP','CE1','CE2','CM1','CM2'];
 function norm(t){ return String(t||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9 ]+/g,' ').replace(/\s+/g,' ').trim(); }
 function tokens(t){ return norm(t).split(' ').filter(w => w.length > 2 && !['DE','DES','LES','LA','LE','FICHE','PREPARATION','PERIODE','ET','DU','EST'].includes(w) || w === 'EST'); }
 // Reconnaissance : le nombre de fiches du fichier est comparé à celui du catalogue (presque unique dans une classe), puis le titre départage.
@@ -139,6 +139,7 @@ async function analyze(){
       const info = await FPBDocx.inspect(await file.arrayBuffer());
       q.title = info.title; q.count = info.count; q.classe = info.classe || '';
       if(!q.classe) q.note = 'classe non reconnue : choisis-la';
+      else if(q.classe === 'MATERNELLE'){ q.matiere = info.domaine ? 'domaine' + info.domaine : ''; q.note = q.matiere ? '' : 'domaine non reconnu : choisis-le'; }
       else { const g = guessMatiere(q.classe, info.title, info.count); q.matiere = g.key; q.note = g.note; }
     }catch(e){ q.note = 'fichier illisible : ' + e.message; q.status = 'err'; }
     queue.push(q);
@@ -186,7 +187,19 @@ async function startUpload(){
       fd.append('token', token); fd.append('classe', q.classe); fd.append('matiere', q.matiere); fd.append('kind', 'docx'); fd.append('file', q.file);
       const res = await fetch('/api/admin-upload-readyfiche-pdf', { method:'POST', body: fd });
       const data = await res.json().catch(() => ({}));
-      if(res.ok && data.ok){ q.status = 'ok'; ok++; log(q.classe+'/'+q.matiere+'.docx déposé.'); }
+      if(res.ok && data.ok){
+        q.status = 'ok'; ok++; log(q.classe+'/'+q.matiere+'.docx déposé.');
+        // Aperçu gratuit : 2 premières fiches, filigrane « APERÇU FICHEPROBOT »
+        try{
+          const pv = await window.FPBDocx.preview(await q.file.arrayBuffer(), 2, 'APERÇU FICHEPROBOT');
+          const f2 = new FormData();
+          f2.append('token', token); f2.append('classe', q.classe); f2.append('matiere', q.matiere); f2.append('kind', 'docxpreview');
+          f2.append('file', new File([pv], q.matiere + '.docx'));
+          const r2 = await fetch('/api/admin-upload-readyfiche-pdf', { method:'POST', body: f2 });
+          const d2 = await r2.json().catch(() => ({}));
+          log(r2.ok && d2.ok ? '  aperçu Word (2 fiches) déposé.' : '  aperçu Word NON déposé : ' + (d2.error||d2.reason||r2.status));
+        }catch(e){ log('  aperçu Word non créé : ' + e.message); }
+      }
       else { q.status = 'fail'; log(q.classe+'/'+q.matiere+' ERREUR : '+(data.error||data.reason||('code '+res.status))); }
     }catch(e){ q.status = 'fail'; log(q.classe+'/'+q.matiere+' ERREUR réseau : '+e.message); }
     render();

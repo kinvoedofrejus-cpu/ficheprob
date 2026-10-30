@@ -196,7 +196,8 @@
           xml = xml.replace(/Par : FicheProBot/g, escRepl('Par : ' + esc(name)));
           xml = xml.replace(/(<w:t(?: [^>]*)?>)FicheProBot(<\/w:t>)/g, '$1' + escRepl(esc(name)) + '$2');
         }
-        if(dateText) xml = xml.replace(/(Fiche élaborée le )[^<]*/g, '$1' + escRepl(esc(dateText)));
+        if(opts.removeDate) xml = xml.replace(/Fiche élaborée le [^<]*/g, '');   // compte propriétaire : pas de date (comme le PDF)
+        else if(dateText) xml = xml.replace(/(Fiche élaborée le )[^<]*/g, '$1' + escRepl(esc(dateText)));
         if(wmPng){
           // Filigrane : référence d'en-tête ajoutée à CHAQUE section (une section = une fiche).
           xml = xml.replace(/<w:sectPr(?![^>]*\/>)([^>]*)>(?!<w:headerReference)/g, '<w:sectPr$1><w:headerReference w:type="default" r:id="rIdFpbHdr"/>');
@@ -240,8 +241,47 @@
     var title = [];
     for(var j = 0; j < texts.length && !/Fiche élaborée/.test(texts[j]) && title.length < 4; j++) title.push(texts[j].trim());
     var count = (xml.match(/<w:sectPr[ >]/g) || []).length;
-    return { classe: classe, title: title.join(' ').replace(/\s+/g, ' ').trim(), count: count };
+    // Maternelle : pas de case « CI…CM2 » ; on reconnaît « DOMAINE 1 » … « DOMAINE 5 » (le plus fréquent dans le fichier)
+    var dom = {}, domaine = null, dbest = 0;
+    texts.forEach(function(t){ var mm = /DOMAINE\s*([1-5])\b/i.exec(t); if(mm) dom[mm[1]] = (dom[mm[1]] || 0) + 1; });
+    Object.keys(dom).forEach(function(k){ if(dom[k] > dbest){ dbest = dom[k]; domaine = k; } });
+    if(!classe && domaine) classe = 'MATERNELLE';
+    return { classe: classe, domaine: domaine, title: title.join(' ').replace(/\s+/g, ' ').trim(), count: count };
   }
 
-  window.FPBDocx = { patch: patch, inspect: inspect };
+  /* Aperçu gratuit : ne garde que les n premières fiches (une fiche = une section) puis personnalise avec le libellé donné
+     (nom/filigrane « APERÇU »). Retourne un Blob .docx. */
+  async function preview(arrayBuffer, n, label){
+    n = Math.max(1, n || 2);
+    var files = await readZip(arrayBuffer);
+    var enc = new TextEncoder(), dec = new TextDecoder(), out = [];
+    for(var i = 0; i < files.length; i++){
+      var f = files[i];
+      if(f.isDir) continue;
+      var data = await fileBytes(f);
+      if(f.name === 'word/document.xml'){
+        var xml = dec.decode(data), pos = -1, k = 0;
+        while(k < n){ pos = xml.indexOf('<w:sectPr', pos + 1); if(pos < 0) break; k++; }
+        var isLast = pos >= 0 && xml.indexOf('<w:sectPr', pos + 1) < 0;
+        if(pos >= 0 && !isLast){
+          var pStart = Math.max(xml.lastIndexOf('<w:p>', pos), xml.lastIndexOf('<w:p ', pos));
+          var sect = xml.slice(pos, xml.indexOf('</w:sectPr>', pos) + 11);
+          xml = xml.slice(0, pStart) + sect + '</w:body></w:document>';
+        }
+        data = enc.encode(xml);
+      }
+      out.push({ name: f.name, data: data });
+    }
+    var small = await (await makeZip(out)).arrayBuffer();
+    return await patch(small, { teacherName: label || 'APERÇU', dateText: '' });
+  }
+
+  async function zip(entries){   // entries : [{ name, blob }] -> Blob .zip
+    var files = [];
+    for(var i = 0; i < entries.length; i++) files.push({ name: entries[i].name, data: new Uint8Array(await entries[i].blob.arrayBuffer()) });
+    var b = await makeZip(files);
+    return new Blob([b], { type: 'application/zip' });
+  }
+
+  window.FPBDocx = { patch: patch, inspect: inspect, preview: preview, zip: zip };
 })();

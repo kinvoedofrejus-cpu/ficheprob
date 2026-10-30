@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Récupération des achats Fiche Prête (admin)</title>
+<style>
+  body{ font-family: 'Poppins', Arial, sans-serif; max-width:680px; margin:0 auto; padding:16px; background:#f5f6fa; color:#1B2740; }
+  h1{ font-size:18px; } h2{ font-size:14px; margin:0 0 8px; } p{ font-size:13px; color:#555; line-height:1.5; }
+  .card{ background:#fff; border-radius:10px; padding:14px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
+  input, select, button{ width:100%; padding:12px; border-radius:7px; box-sizing:border-box; margin-bottom:8px; font-size:14px; }
+  input, select{ border:1px solid #ccc; background:#fff; }
+  button{ border:none; background:#2557C7; color:#fff; font-weight:600; cursor:pointer; }
+  button.light{ background:#fff; color:#2557C7; border:1.5px solid #2557C7; }
+  button.small{ width:auto; padding:8px 12px; margin:4px 6px 0 0; font-size:12.5px; }
+  button:disabled{ opacity:.5; }
+  .item{ border-top:1px solid #eee; padding:10px 0; font-size:13px; }
+  .chip{ display:inline-block; font-size:11.5px; padding:2px 8px; border-radius:20px; background:#e8eefc; color:#2557C7; margin-right:4px; }
+  .code{ font-size:22px; letter-spacing:3px; font-weight:700; background:#fff4e0; border-radius:8px; padding:10px; text-align:center; margin:8px 0; user-select:all; }
+  small{ color:#777; }
+  #log{ font-size:12px; color:#555; white-space:pre-wrap; max-height:140px; overflow:auto; background:#fafafa; padding:8px; border-radius:6px; }
+</style>
+</head>
+<body>
+<h1>Récupération des achats Fiche Prête</h1>
+<p>
+  Pour un acheteur <b>sans compte</b> qui a perdu son achat (téléphone changé, données effacées) : retrouve son achat par le
+  <b>n° de transaction</b> (reçu FedaPay), vérifie son identité (capture du paiement, nom…), puis génère un
+  <b>code de récupération</b> à lui envoyer. Il le saisit dans l'application, sur « J'ai perdu mon achat ».
+  Tu peux aussi <b>redonner un téléchargement</b> d'une matière déjà téléchargée (fichier perdu).
+</p>
+
+<div class="card" id="loginCard">
+  <h2>Connexion admin</h2>
+  <input type="email" id="email" placeholder="E-mail admin" autocomplete="username">
+  <input type="password" id="password" placeholder="Mot de passe admin" autocomplete="current-password">
+  <button onclick="doLogin()" id="loginBtn">Se connecter</button>
+  <div id="loginMsg" style="font-size:13px; color:#c0392b;"></div>
+</div>
+
+<div id="mainArea" style="display:none;">
+  <div class="card">
+    <h2>Achats sans compte (payés)</h2>
+    <input type="text" id="q" inputmode="numeric" placeholder="Filtrer par n° de transaction (facultatif)">
+    <button onclick="load()">Rechercher</button>
+    <div id="list"></div>
+  </div>
+</div>
+<div class="card"><div id="log"></div></div>
+
+<script>
+let token = null;
+let catalogue = null;
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function log(m){ const el=document.getElementById('log'); el.textContent = new Date().toLocaleTimeString()+'  '+m+'\n'+el.textContent; }
+document.getElementById('email').value = localStorage.getItem('fpb_upload_email') || '';
+
+async function doLogin(){
+  const email = document.getElementById('email').value.trim(), password = document.getElementById('password').value;
+  const msg = document.getElementById('loginMsg'); msg.textContent = '';
+  if(!email || !password){ msg.textContent = 'Saisis ton e-mail et ton mot de passe.'; return; }
+  document.getElementById('loginBtn').disabled = true;
+  try{
+    const res = await fetch('/api/admin-login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email,password}) });
+    const data = await res.json();
+    if(data.ok && data.token){
+      token = data.token; localStorage.setItem('fpb_upload_email', email);
+      document.getElementById('password').value = '';
+      document.getElementById('loginCard').style.display = 'none';
+      document.getElementById('mainArea').style.display = 'block';
+      await loadCatalogue(); load();
+    } else msg.textContent = 'Échec de connexion : ' + (data.error || data.reason || 'identifiants refusés.');
+  }catch(e){ msg.textContent = 'Erreur réseau : ' + e.message; }
+  document.getElementById('loginBtn').disabled = false;
+}
+function loadCatalogue(){
+  return new Promise(resolve => {
+    const s = document.createElement('script'); s.src = 'ready-data/catalogue.js?t=' + Date.now();
+    s.onload = () => { catalogue = window.READY_CATALOGUE || null; resolve(); }; s.onerror = () => resolve();
+    document.head.appendChild(s);
+  });
+}
+function label(classe, key){ return (catalogue && catalogue[classe] && catalogue[classe][key] && catalogue[classe][key].matiereLabel) || key; }
+
+async function api(body){
+  const res = await fetch('/api/admin-readyfiche-recovery', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ token, ...body }) });
+  const data = await res.json().catch(() => ({}));
+  if(!res.ok || !data.ok) throw new Error(data.error || data.reason || ('code ' + res.status));
+  return data;
+}
+
+let items = [];
+async function load(){
+  const box = document.getElementById('list'); box.innerHTML = '<p>Chargement…</p>';
+  try{
+    items = (await api({ action:'list', q: document.getElementById('q').value.trim() })).items;
+    box.innerHTML = items.length ? items.map((it, i) => {
+      const d = it.paidAt ? new Date(it.paidAt).toLocaleDateString('fr-FR') + ' ' + new Date(it.paidAt).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}) : '';
+      const what = it.matiere === '*' ? 'Toute la classe ' + esc(it.classe) : esc(it.classe) + ' — ' + esc(label(it.classe, it.matiere));
+      const dl = it.done.length ? '<br><small>Déjà téléchargé : ' + it.done.map(k => esc(label(it.classe, k))).join(', ') + '</small>' : '<br><small>Rien téléchargé pour l\\'instant.</small>';
+      const resets = it.done.map(k => '<button class="small light" onclick="doReset('+i+',\\''+esc(k)+'\\')">Redonner : '+esc(label(it.classe,k)).slice(0,28)+'</button>').join('');
+      return '<div class="item"><b>N° '+esc(it.txId)+'</b> <span class="chip">'+(it.format==='word'?'Word':'PDF')+'</span><span class="chip">'+esc(it.amount)+' F</span> <small>'+d+'</small><br>'+what+dl
+        + '<div><button class="small" onclick="doCode('+i+')">Générer un code de récupération</button>'+resets+'</div><div id="out-'+i+'"></div></div>';
+    }).join('') : '<p>Aucun achat sans compte trouvé.</p>';
+  }catch(e){ box.innerHTML = '<p style="color:#c0392b;">Erreur : '+esc(e.message)+'</p>'; }
+}
+async function doCode(i){
+  const it = items[i];
+  try{
+    const r = await api({ action:'code', txId: it.txId });
+    const msg = "Bonjour, voici votre code de récupération FicheProBot pour l'achat n° " + it.txId + " : " + r.code + ". Dans l'application : Fiche Prête → « J'ai perdu mon achat », puis saisissez le n° " + it.txId + " et ce code. Valable 7 jours, à usage unique.";
+    document.getElementById('out-'+i).innerHTML = '<div class="code">'+esc(r.code)+'</div><small>Valable 7 jours, une seule utilisation.</small>'
+      + '<button class="small light" onclick="copyMsg('+i+')">Copier le message à envoyer</button><textarea id="msg-'+i+'" style="display:none;">'+esc(msg)+'</textarea>';
+    log('Code généré pour ' + it.txId);
+  }catch(e){ alert('Erreur : ' + e.message); }
+}
+function copyMsg(i){
+  const t = document.getElementById('msg-'+i).value;
+  (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => alert('Message copié : colle-le dans WhatsApp.')).catch(() => prompt('Copie ce message :', t));
+}
+async function doReset(i, matiere){
+  const it = items[i];
+  if(!confirm('Redonner UN téléchargement de « ' + label(it.classe, matiere) + ' » pour l\\'achat ' + it.txId + ' ?')) return;
+  try{ await api({ action:'reset', txId: it.txId, matiere }); log('Téléchargement redonné : ' + it.txId + ' / ' + matiere); load(); }
+  catch(e){ alert('Erreur : ' + e.message); }
+}
+</script>
+</body>
+</html>
