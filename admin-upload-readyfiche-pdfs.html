@@ -43,7 +43,7 @@
   <div class="card">
     <h2>1. Classe</h2>
     <select id="classeSel" onchange="analyze(); refreshR2();">
-      <option value="CI">CI</option><option value="CP">CP</option><option value="CE1" selected>CE1</option>
+      <option value="MATERNELLE">MATERNELLE</option><option value="CI">CI</option><option value="CP">CP</option><option value="CE1" selected>CE1</option>
       <option value="CE2">CE2</option><option value="CM1">CM1</option><option value="CM2">CM2</option>
     </select>
     <h2 style="margin-top:6px;">2. Fichiers</h2>
@@ -128,7 +128,7 @@ function parseFile(file, classeSel){
   const parts = (file.webkitRelativePath || '').split('/');
   if(parts.length >= 2){
     const parent = parts[parts.length - 2];
-    if(catalogue ? !!catalogue[parent] : /^(CI|CP|CE1|CE2|CM1|CM2)$/.test(parent)) classe = parent;
+    if(catalogue ? !!catalogue[parent] : /^(MATERNELLE|CI|CP|CE1|CE2|CM1|CM2)$/.test(parent)) classe = parent;
   }
   // « CE1-francais.pdf » (nom d'aperçu) -> « francais »
   if(matiere.startsWith(classe + '-')) matiere = matiere.slice(classe.length + 1);
