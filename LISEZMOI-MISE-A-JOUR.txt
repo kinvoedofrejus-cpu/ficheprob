@@ -1,3 +1,14 @@
+MISE A JOUR FICHEPROBOT (08/11/2026) - Sauvegarde de l'historique + Rappels
+  1) SAUVEGARDE / SYNCHRONISATION DE L'HISTORIQUE : les fiches sont copiees automatiquement sur le compte
+     (numero + code). Nouveau telephone ou cache vide : on retrouve tout en se connectant. L'app reste utilisable
+     hors-ligne ; la synchro reprend au retour du reseau. Pastille d'etat en haut de l'onglet Historique.
+     La table D1 « fiches_sync » se cree toute seule au premier appel (rien a executer).
+  2) RAPPELS : pastille rouge + liste dans la cloche + carte « A ne pas oublier » sur l'accueil : abonnement qui expire
+     (3 jours), fiches restantes, fin de mois (statistiques, point d'execution, planification du mois suivant),
+     preparation de la semaine, inactivite. Boutons Ouvrir / Plus tard / Fait, et option « Desactiver les rappels ».
+  Fichiers : index.html, service-worker.js (cache v116), worker.js, schema.sql, LISEZMOI-MISE-A-JOUR.txt
+  NOUVEAU : functions/api/sync-fiches.js
+
 MISE A JOUR FICHEPROBOT (13/10/2026) - 2e lot
   Prix des Fiches Pretes modifiable (0 = gratuit) depuis l'admin > Abonnements ;
   resumes : nouvelle mise en page avec logo ; "Je retiens" retire apres "Resume".
