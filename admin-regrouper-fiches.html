@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Regrouper des fiches prêtes (admin)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<style>
+  body{ font-family:'Poppins', Arial, sans-serif; max-width:680px; margin:0 auto; padding:16px 16px 120px; background:#f5f6fa; color:#1B2740; }
+  h1{ font-size:18px; } h2{ font-size:14px; margin:0 0 8px; } p{ font-size:13px; color:#555; line-height:1.5; }
+  .card{ background:#fff; border-radius:10px; padding:14px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
+  input[type=text], input[type=email], input[type=password], select, button{ width:100%; padding:12px; border-radius:7px; box-sizing:border-box; margin-bottom:8px; font-size:14px; }
+  input[type=text], input[type=email], input[type=password], select{ border:1px solid #ccc; background:#fff; }
+  button{ border:none; background:#2557C7; color:#fff; font-weight:600; cursor:pointer; }
+  button.light{ background:#fff; color:#2557C7; border:1.5px solid #2557C7; }
+  button:disabled{ opacity:.5; }
+  .warn{ font-size:12.5px; color:#b25e00; background:#fff4e0; border-radius:6px; padding:8px 10px; margin:6px 0; }
+  .ok{ font-size:12.5px; color:#1a6b3a; background:#e7f6ec; border-radius:6px; padding:8px 10px; margin:6px 0; }
+  small{ color:#777; }
+  .item{ display:flex; gap:10px; align-items:flex-start; padding:9px 4px; border-bottom:1px solid #eee; font-size:13px; }
+  .item:last-child{ border-bottom:none; }
+  .item input[type=checkbox]{ width:22px; height:22px; margin-top:2px; flex:none; }
+  .item .num{ color:#2557C7; font-weight:700; min-width:34px; }
+  .item .sub{ color:#888; font-size:11.5px; }
+  .item input.edit{ width:100%; padding:6px 8px; font-size:13px; margin:0; border:1px solid #ccc; border-radius:6px; box-sizing:border-box; }
+  .chips{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+  .chip{ border:1.5px solid #2557C7; color:#2557C7; background:#fff; border-radius:16px; padding:6px 11px; font-size:12.5px; cursor:pointer; width:auto; margin:0; font-weight:600; }
+  .chip.on{ background:#2557C7; color:#fff; }
+  .bar{ position:fixed; left:0; right:0; bottom:0; background:#fff; border-top:1px solid #ddd; padding:10px 16px; max-width:680px; margin:0 auto; box-sizing:border-box; }
+  #prog{ height:6px; background:#e3e8f5; border-radius:3px; overflow:hidden; margin:6px 0; display:none; }
+  #progBar{ height:100%; width:0; background:#2557C7; transition:width .2s; }
+  label.chk{ display:flex; align-items:center; gap:8px; font-size:13px; margin:4px 0 8px; }
+  label.chk input{ width:18px; height:18px; margin:0; }
+</style>
+</head>
+<body>
+<h1>Regrouper des fiches prêtes en un seul PDF</h1>
+<p>Choisis une classe, coche les titres voulus (tu peux changer de matière : la sélection est conservée), puis crée le PDF. Le nom et le filigrane sont ajoutés comme pour un client.</p>
+
+<div class="card" id="loginCard">
+  <h2>Connexion admin</h2>
+  <input type="email" id="email" placeholder="E-mail admin" autocomplete="username">
+  <input type="password" id="password" placeholder="Mot de passe admin" autocomplete="current-password">
+  <button onclick="doLogin()" id="loginBtn">Se connecter</button>
+  <div id="loginMsg" style="font-size:13px; color:#c0392b;"></div>
+</div>
+
+<div id="mainArea" style="display:none;">
+  <div class="card">
+    <h2>1. Classe et matière</h2>
+    <select id="classeSel" onchange="pickClasse()"></select>
+    <div class="chips" id="matChips"></div>
+    <div id="status"></div>
+    <button class="light" id="indexBtn" onclick="indexTitles()" style="display:none;">Indexer les titres de cette matière</button>
+    <div id="prog"><div id="progBar"></div></div>
+  </div>
+
+  <div class="card" id="listCard" style="display:none;">
+    <h2>2. Titres</h2>
+    <input type="text" id="q" placeholder="Rechercher un titre…" oninput="renderList()">
+    <div style="display:flex; gap:8px;">
+      <button class="light" onclick="selAll(true)">Tout cocher (filtrés)</button>
+      <button class="light" onclick="selAll(false)">Tout décocher</button>
+    </div>
+    <div id="list"></div>
+    <button class="light" id="saveTitlesBtn" onclick="saveTitles()" style="display:none;">Enregistrer les titres corrigés (visibles par les enseignants)</button>
+  </div>
+
+  <div class="card">
+    <h2>3. Nom et filigrane</h2>
+    <input type="text" id="nom" placeholder="Nom à mettre (laisser vide = sans nom)">
+    <label class="chk"><input type="checkbox" id="wm" checked> Filigrane sur toutes les pages</label>
+    <input type="text" id="outName" placeholder="Nom du fichier (facultatif)">
+  </div>
+</div>
+
+<div class="bar" id="bar" style="display:none;">
+  <div id="selInfo" style="font-size:12.5px; margin-bottom:6px;"></div>
+  <button id="buildBtn" onclick="buildPdf()" disabled>Créer le PDF</button>
+</div>
+
+<script src="regrouper-fiches.js?v=2"></script>
+<script>
+let token = null, catalogue = null, bridgeP = null;
+const state = { classe:'', matiere:'', titles:{}, hasIndex:{}, sel:{} };   // sel[classe::matiere] = Set d'index
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const key = (c, m) => c + '::' + m;
+
+document.getElementById('email').value = localStorage.getItem('fpb_upload_email') || '';
+async function doLogin(){
+  const email = $('email').value.trim(), password = $('password').value, msg = $('loginMsg');
+  msg.textContent = '';
+  if(!email || !password){ msg.textContent = 'Saisis ton e-mail et ton mot de passe.'; return; }
+  $('loginBtn').disabled = true;
+  try{
+    const res = await fetch('/api/admin-login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email,password}) });
+    const data = await res.json();
+    if(data.ok && data.token){
+      token = data.token; localStorage.setItem('fpb_upload_email', email);
+      $('password').value = ''; $('loginCard').style.display = 'none'; $('mainArea').style.display = 'block'; $('bar').style.display = 'block';
+      await loadCatalogue(); initClasses();
+    } else msg.textContent = 'Échec de connexion : ' + (data.error || data.reason || 'identifiants refusés.');
+  }catch(e){ msg.textContent = 'Erreur réseau : ' + e.message; }
+  $('loginBtn').disabled = false;
+}
+function loadCatalogue(){
+  return new Promise(resolve => {
+    const s = document.createElement('script');
+    s.src = 'ready-data/catalogue.js?t=' + Date.now();
+    s.onload = () => { catalogue = window.READY_CATALOGUE || {}; resolve(); };
+    s.onerror = () => { catalogue = {}; resolve(); };
+    document.head.appendChild(s);
+  });
+}
+function initClasses(){
+  const cl = Object.keys(catalogue);
+  $('classeSel').innerHTML = cl.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  pickClasse();
+}
+function pickClasse(){
+  state.classe = $('classeSel').value;
+  const mats = catalogue[state.classe] || {};
+  $('matChips').innerHTML = Object.keys(mats).map(m => {
+    const n = (state.sel[key(state.classe, m)] || new Set()).size;
+    return `<button class="chip" data-m="${esc(m)}" onclick="pickMatiere('${esc(m)}')">${esc(mats[m].matiereLabel || m)}${n ? ' (' + n + ')' : ''}</button>`;
+  }).join('');
+  state.matiere = ''; $('listCard').style.display = 'none'; $('status').innerHTML = ''; $('indexBtn').style.display = 'none';
+  updateBar();
+}
+function refreshChips(){
+  const mats = catalogue[state.classe] || {};
+  document.querySelectorAll('#matChips .chip').forEach(b => {
+    const m = b.getAttribute('data-m'); const n = (state.sel[key(state.classe, m)] || new Set()).size;
+    b.textContent = (mats[m].matiereLabel || m) + (n ? ' (' + n + ')' : '');
+    b.classList.toggle('on', m === state.matiere);
+  });
+}
+
+/* ----- Accès aux fichiers de R2 (réservé à l'admin) ----- */
+async function getR2(k){
+  const r = await fetch('/api/admin-backup-file', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ token, key: k }) });
+  if(!r.ok) throw new Error(r.status === 404 ? 'Fichier introuvable : ' + k.split('/').pop() : 'Récupération impossible (HTTP ' + r.status + ').');
+  return r;
+}
+const cache = {};   // pdf/meta déjà téléchargés (une matière pèse 5 à 40 Mo)
+async function getBase(classe, matiere){
+  const k = key(classe, matiere);
+  if(!cache[k]){
+    const meta = await (await getR2(`readyfiche-pdfs/${classe}/${matiere}.meta.json`)).json();
+    const bytes = await (await getR2(`readyfiche-pdfs/${classe}/${matiere}.pdf`)).arrayBuffer();
+    cache[k] = { meta, bytes };
+  }
+  return cache[k];
+}
+function prog(p){ $('prog').style.display = p == null ? 'none' : 'block'; if(p != null) $('progBar').style.width = Math.round(p) + '%'; }
+
+async function pickMatiere(m){
+  state.matiere = m; const k = key(state.classe, m);
+  refreshChips();
+  $('listCard').style.display = 'block'; $('q').value = '';
+  $('status').innerHTML = '<small>Chargement des titres…</small>'; $('indexBtn').style.display = 'none';
+  if(!state.titles[k]){
+    try{
+      const doc = await FPBRegroup.fetchTitles('', state.classe, m);
+      if(doc){ state.titles[k] = doc.titles; state.hasIndex[k] = true; }
+    }catch(e){}
+  }
+  if(!state.titles[k]){
+    $('status').innerHTML = '<div class="warn">Les titres de cette matière ne sont pas encore indexés. Appuie sur « Indexer » (une seule fois par matière : le PDF est lu, les titres sont repérés, tu peux les corriger puis les enregistrer).</div>';
+    $('indexBtn').style.display = 'block'; $('indexBtn').disabled = false;
+    $('list').innerHTML = ''; $('saveTitlesBtn').style.display = 'none';
+  } else {
+    $('status').innerHTML = `<small>${state.titles[k].length} fiches.</small>`;
+    $('indexBtn').style.display = 'block'; $('indexBtn').textContent = 'Ré-indexer les titres de cette matière'; $('indexBtn').disabled = false;
+    renderList();
+  }
+}
+
+async function indexTitles(){
+  const k = key(state.classe, state.matiere), m = state.matiere, c = state.classe;
+  $('indexBtn').disabled = true; prog(0);
+  try{
+    $('status').innerHTML = '<small>Téléchargement du PDF…</small>';
+    const { meta, bytes } = await getBase(c, m);
+    $('status').innerHTML = '<small>Lecture des titres…</small>';
+    const titles = await FPBRegroup.extractTitles(bytes, meta, (i, n) => prog(i / n * 100));
+    state.titles[k] = titles; state.hasIndex[k] = false;
+    $('status').innerHTML = `<div class="ok">${titles.length} titres lus. Vérifie-les (tu peux corriger un titre en le touchant), puis « Enregistrer ».</div>`;
+    renderList(true);
+  }catch(e){
+    $('status').innerHTML = '<div class="warn">Indexation impossible : ' + esc(e.message) + '</div>';
+  }
+  prog(null); $('indexBtn').disabled = false;
+}
+
+function renderList(editMode){
+  const k = key(state.classe, state.matiere), titles = state.titles[k] || [];
+  const q = $('q').value.trim().toLowerCase();
+  const sel = state.sel[k] || (state.sel[k] = new Set());
+  const unsaved = !state.hasIndex[k];
+  $('saveTitlesBtn').style.display = unsaved || editMode ? 'block' : 'none';
+  $('list').innerHTML = titles.map((t, i) => {
+    const hay = (t.t + ' ' + (t.th || '') + ' ' + (t.s || '')).toLowerCase();
+    if(q && hay.indexOf(q) < 0) return '';
+    return `<div class="item">
+      <input type="checkbox" ${sel.has(i) ? 'checked' : ''} onchange="toggle(${i}, this.checked)">
+      <div style="flex:1; min-width:0;"><div><span class="num">${i + 1}.</span> ${esc(t.t)}</div>
+      <div class="sub">${t.d ? esc((t.dk || 'Dossier') + ' ' + t.d) : '<i>sans dossier</i>'}${t.a ? ' · SA ' + esc(t.a) : ''}</div>
+      ${t.th ? `<div class="sub">${esc(t.th)}</div>` : ''}${t.s ? `<div class="sub">${esc(t.s)} · ${t.p || '?'} p.</div>` : ''}
+      ${unsaved ? `<input class="edit" value="${esc(t.t)}" onchange="editTitle(${i}, this.value)">
+        <div style="display:flex; gap:6px; margin-top:4px;"><input class="edit" placeholder="Dossier/Unité n°" value="${esc(t.d || '')}" onchange="editField(${i}, 'd', this.value)"><input class="edit" placeholder="SA n°" value="${esc(t.a || '')}" onchange="editField(${i}, 'a', this.value)"></div>` : ''}</div></div>`;
+  }).join('') || '<small>Aucun titre ne correspond.</small>';
+  updateBar();
+}
+function toggle(i, on){ const k = key(state.classe, state.matiere); const s = state.sel[k] || (state.sel[k] = new Set()); on ? s.add(i) : s.delete(i); refreshChips(); updateBar(); }
+function selAll(on){
+  const k = key(state.classe, state.matiere), titles = state.titles[k] || [], q = $('q').value.trim().toLowerCase();
+  const s = state.sel[k] || (state.sel[k] = new Set());
+  titles.forEach((t, i) => { const hay = (t.t + ' ' + (t.th||'') + ' ' + (t.s||'')).toLowerCase(); if(q && hay.indexOf(q) < 0) return; on ? s.add(i) : s.delete(i); });
+  renderList(); refreshChips();
+}
+function editField(i, f, v){ const k = key(state.classe, state.matiere); const t = state.titles[k][i]; v = String(v || '').replace(/\D/g, '').slice(0, 3); t[f] = v; if(f === 'd' && v && !t.dk) t.dk = 'Dossier'; }
+function editTitle(i, v){ const k = key(state.classe, state.matiere); state.titles[k][i].t = v.trim() || state.titles[k][i].t; }
+
+async function saveTitles(){
+  const c = state.classe, m = state.matiere, k = key(c, m);
+  const doc = FPBRegroup.titlesDoc(state.titles[k]);
+  const fd = new FormData();
+  fd.append('token', token); fd.append('classe', c); fd.append('matiere', m); fd.append('kind', 'titles');
+  fd.append('file', new Blob([JSON.stringify(doc)], { type:'application/json' }), m + '.titles.json');
+  $('saveTitlesBtn').disabled = true;
+  try{
+    const res = await fetch('/api/admin-upload-readyfiche-pdf', { method:'POST', body: fd });
+    const data = await res.json().catch(() => ({}));
+    if(!data.ok) throw new Error(data.reason || data.error || 'refusé');
+    state.hasIndex[k] = true;
+    $('status').innerHTML = '<div class="ok">Titres enregistrés : les enseignants les voient maintenant.</div>';
+    renderList();
+  }catch(e){ $('status').innerHTML = '<div class="warn">Enregistrement impossible : ' + esc(e.message) + '</div>'; }
+  $('saveTitlesBtn').disabled = false;
+}
+
+function totalSel(){ return Object.keys(state.sel).reduce((n, k) => n + state.sel[k].size, 0); }
+function updateBar(){
+  const n = totalSel(), mats = Object.keys(state.sel).filter(k => state.sel[k].size).length;
+  $('selInfo').textContent = n ? `${n} fiche${n > 1 ? 's' : ''} choisie${n > 1 ? 's' : ''} dans ${mats} matière${mats > 1 ? 's' : ''}` : 'Aucune fiche choisie';
+  $('buildBtn').disabled = !n;
+}
+
+/* Cadre invisible (même origine) qui charge l'application en « mode pont » : on y réutilise stampReadyFichePdf. */
+function ensureBridge(){
+  if(bridgeP) return bridgeP;
+  bridgeP = new Promise((resolve, reject) => {
+    const f = document.createElement('iframe');
+    f.src = '/?adminbridge=1'; f.setAttribute('aria-hidden', 'true'); f.tabIndex = -1;
+    f.style.cssText = 'position:fixed; left:-10000px; top:0; width:820px; height:1200px; border:0; opacity:0; pointer-events:none;';
+    document.body.appendChild(f);
+    const t0 = Date.now();
+    const timer = setInterval(() => {
+      try{ const b = f.contentWindow && f.contentWindow.FPBAdminBridge; if(b && b.ready && b.stampPdf){ clearInterval(timer); resolve(b); return; } }catch(e){}
+      if(Date.now() - t0 > 90000){ clearInterval(timer); f.remove(); bridgeP = null; reject(new Error("le moteur de l'application ne répond pas (mise à jour pas encore déployée ?)")); }
+    }, 300);
+  });
+  return bridgeP;
+}
+
+async function buildPdf(){
+  const btn = $('buildBtn'); btn.disabled = true; const old = btn.textContent;
+  try{
+    const keys = Object.keys(state.sel).filter(k => state.sel[k].size);
+    const sources = [];
+    for(let ki = 0; ki < keys.length; ki++){
+      const [c, m] = keys[ki].split('::');
+      btn.textContent = `Téléchargement ${ki + 1}/${keys.length}…`; prog(ki / keys.length * 30);
+      const base = await getBase(c, m);
+      const tl = state.titles[keys[ki]];
+      if(tl && tl.length !== base.meta.pageStarts.length) throw new Error(`L'index des titres de « ${m} » ne correspond plus au PDF (${tl.length} titres, ${base.meta.pageStarts.length} fiches). Ré-indexe cette matière.`);
+      sources.push({ bytes: base.bytes, meta: base.meta, indices: Array.from(state.sel[keys[ki]]).sort((a, b) => a - b) });
+    }
+    btn.textContent = 'Assemblage des pages…';
+    const merged = await FPBRegroup.buildSelection(sources, (i, n) => prog(30 + i / n * 40));
+    let bytes = merged.bytes;
+    const name = $('nom').value.trim();
+    if(name){
+      btn.textContent = 'Ajout du nom…'; prog(75);
+      const bridge = await ensureBridge();
+      bytes = await bridge.stampPdf(merged.bytes, merged.meta, name, { watermark: $('wm').checked });
+    }
+    prog(100);
+    const fname = ($('outName').value.trim() || ('Fiches_choisies_' + keys.map(k => k.split('::')[0] + '-' + k.split('::')[1]).join('_')))
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w\-]+/g, '_').slice(0, 80) + '.pdf';
+    const url = URL.createObjectURL(new Blob([bytes], { type:'application/pdf' }));
+    const a = document.createElement('a'); a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    $('status').innerHTML = `<div class="ok">PDF créé : ${esc(fname)} (${merged.meta.pageCount} pages).</div>`;
+  }catch(e){
+    $('status').innerHTML = '<div class="warn">Création impossible : ' + esc(e.message) + '</div>';
+  }
+  prog(null); btn.textContent = old; updateBar();
+}
+</script>
+</body>
+</html>
